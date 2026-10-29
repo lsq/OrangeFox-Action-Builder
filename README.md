@@ -11,6 +11,7 @@ Compile your first custom recovery from OrangeFox Recovery using Github Action.
  * DEVICE_PATH (`device/vendor/codename`)
  * DEVICE_NAME (Your device codename)
  * BUILD_TARGET (`boot`, `recovery`, `vendorboot`)
+ * WLAN (build wlan for ofrp)
 
  # Note
 * This action will now only support manifest 12.1 and 14.1, since all orangefox manifest below 12.1 are considered obsolete.
