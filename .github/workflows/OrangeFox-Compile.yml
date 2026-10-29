@@ -9,6 +9,10 @@ name: OrangeFox - Build
 on:
   workflow_dispatch:
     inputs:
+      debug_enabled:
+        required: false
+        default: false
+        type: boolean
       MANIFEST_BRANCH:
         description: 'OrangeFox Manifest Branch'
         required: true
@@ -20,23 +24,23 @@ on:
       DEVICE_TREE:
         description: 'OrangeFox Device Tree'
         required: true
-        default: 'https://github.com/ymdzq/OFRP-device_xiaomi_mondrian'
+        default: 'https://github.com/lsq/device_xiaomi_alioth-TWRP'
       DEVICE_TREE_BRANCH:
         description: 'OrangeFox Device Tree Branch'
         required: true
-        default: 'fox_12.1-a16'
+        default: 'android-13'
       DEVICE_PATH:
         description: 'Specify your Device Path'
         required: true
-        default: 'device/xiaomi/mondrian'
+        default: 'device/xiaomi/alioth'
       DEVICE_NAME:
         description: 'Specify your Device Codename'
         required: true
-        default: 'mondrian'
+        default: 'thyme'
       BUILD_TARGET:
         description: 'Specify your Build Target'
         required: true
-        default: 'recovery'
+        default: 'boot'
         type: choice
         options:
         - boot
@@ -76,7 +80,8 @@ jobs:
 
     - name: Build Environment
       run: |
-        sudo apt install aria2 linux-modules-extra-$(uname -r) zram-tools -y
+        sudo apt install lsd neovim ripgrep aria2 zram-tools -y
+        #linux-modules-extra-$(uname -r)
         git clone https://gitlab.com/OrangeFox/misc/scripts.git -b master
         cd scripts
         sudo bash setup/android_build_env.sh
@@ -95,7 +100,7 @@ jobs:
       uses: actions/checkout@main
 
     - name: Setup ccache
-      uses: hendrikmuhs/ccache-action@v1.2
+      uses: hendrikmuhs/ccache-action@v1.2.4
       if: inputs.USE_CCACHE
       with:
         max-size: "2G"
@@ -140,12 +145,118 @@ jobs:
       if: inputs.MANIFEST_BRANCH == '12.1'
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/bootable/recovery
-        git remote add ymdzq https://github.com/ymdzq/OrangeFox_Recovery && git fetch ymdzq fox_12.1 && git merge --no-ff ymdzq/fox_12.1 -m "Apply custom patches"
+        git remote add ymdzq https://github.com/ymdzq/OrangeFox_Recovery && git fetch ymdzq fox_12.1 
+        currentBranch=$(git rev-parse --abbrev-ref HEAD)
+        echo $currentBranch
+        git checkout -b local ymdzq/fox_12.1
+        cmtId=$(git rev-parse HEAD)
+        echo $cmtId
+        git restore --source=0ee6f8e --staged --worktree data.cpp
+        git restore --source=0ee6f8e --staged --worktree gui/theme/portrait_hdpi/pages/advanced.xml
+        git restore --source=0ee6f8e --staged --worktree gui/theme/extra-languages/languages/zh_CN.xml
+        git checkout 0ee6f8e -- gui/theme/extra-languages/languages/zn_TW.xml
+        git add gui/theme/extra-languages/languages/zn_TW.xml
+        git restore --source=0ee6f8e --staged --worktree gui/theme/portrait_hdpi/pages/customization.xml
+        git commit -m "Revert"
+
+        git checkout $currentBranch
+        git merge --no-ff local -m "Apply custom patches"
+        #git restore --source=$cmtId --staged --worktree gui/theme/extra-languages/languages/zh_CN.xml
+        #git restore --source=$cmtId --staged --worktree gui/theme/extra-languages/languages/zn_TW.xml
+        sed -i '/mPersist.SetValue(TW_TIME_ZONE_GUIDST/s/0/1/' data.cpp
+        # sed -i 's/\(listitem name="\)Pie/\1{@cust_navbar_pie}/' gui/theme/portrait_hdpi/pages/customization.xml
+        cat <<-'EOF' >ad.txt
+                  <listitem name="{@disable_avb2=Disable AVB2.0}">
+                      <condition var1="fox_auto_disable_vbmeta_avb2" var2="1"/>
+                      <icon res="bs_btn_archive"/>
+                      <actions>
+                          <action function="set">tw_back=advanced</action>
+                          <action function="set">tw_action=disableAVB2</action>
+                          <action function="set">tw_text1={@disable_avb2_confirm=Disable AVB2.0?}</action>
+                          <action function="set">tw_action_text1={@disabling_AVB2=Disabling AVB2.0...}</action>
+                          <action function="set">tw_complete_text1={@disabling_AVB2_complete=Disabled AVB2.0}</action>
+                          <action function="set">tw_slider_text={@swipe_to_confirm=Swipe to Confirm}</action>
+                          <action function="page">confirm_action</action>
+                      </actions>
+                  </listitem>
+        EOF
+        cat ad.txt
+        sed -i -e '/terminal_btn/e cat ad.txt' gui/theme/portrait_hdpi/pages/advanced.xml
+        rm -rf ad.txt
+        git status
+        git add .
+        git commit -m "fix conflict"
+
         if [ "${{ inputs.ADD_WLAN_SUPPORT }}" = "true" ]; then
         wget "https://github.com/ymdzq/OrangeFox_Recovery/commit/f8712872b9ec663b658a1e8eba4840877fe45ea6.patch" -O wlan.patch
+        sed -i '\%+++ b/gui/theme/common/languages/en.xml%,\%</language>%{s/,5/,4/;s/,18/,16/;/^+$/d;/\t<\/resources>/d;/ <\/language>/{s/.*//}}' wlan.patch
+
+        sed -i '\%diff --git a/gui/theme/portrait_hdpi/pages/advanced.xml b/gui/theme/portrait_hdpi/pages/advanced.xml%,\%\t*<action function="page">mount</action>$%d' wlan.patch
+        cat <<-'EOF' > wlan.xml
+        				<listitem name="{@wlan_menu}">
+        					<condition var1="tw_enable_network" var2="1"/>
+        					<icon res="wlan"/>
+        					<action function="page">wlan</action>
+        				</listitem>
+        EOF
+        sed -i '\%^\t*<listitem name="{@reboot_btn}">$%e cat wlan.xml' gui/theme/portrait_hdpi/pages/advanced.xml
+        rm -rf wlan.xml
+
+        sed -i '\%diff --git a/gui/theme/portrait_hdpi/resources/images.xml b/gui/theme/portrait_hdpi/resources/images.xml%,\%^\t*<image name="info" filename="Default/Icons/info" retainaspect="1"/>$%d' wlan.patch
+        sed -i '\%Icons/bs_btn_restore%{s!$!\n		<image name="bs_adv_wlan" filename="SVG/Icons/wlan.svg" retainaspect="1" tint="#ffe2bd" scale="3.25"/>\n		<image name="bs_btn_wut" filename="SVG/Icons/wut.svg" retainaspect="1" tint="#413327" scale="3.25"/>\n!}' gui/theme/portrait_hdpi/resources/images.xml
+
+        git add gui/theme/portrait_hdpi/*
+        git status
+        #git restore wlan.patch
+        git commit -m "fix wlan.patch"
+        #patch -p1 <wlan.patch
+        git status
         git am wlan.patch
+        rm wlan.patch
+
         wget "https://github.com/ymdzq/OrangeFox_Recovery/commit/55743730c43681a777c4eacddd9d64a84dce3a54.patch" -O wlan2.patch
+        sed -i 's/bs_adv_term/terminal/' wlan2.patch
+
+        git status
+        #git restore wlan2.patch
+        #git commit -m "fix wlan2.patch"
+        #git status
         git am wlan2.patch
+
+        cat <<-'EOF' > wut.svg
+        <svg xmlns="http://w3.org" viewBox="0 0 100 100" width="100" height="100">
+          <!-- 
+            根据上传的图片重新绘制的 SVG 代码：
+            包含带箭头的逆时针/顺时针循环圆弧、时钟中心指针（指向大约10点或50分位置）以及三个刻度圆点。
+          -->
+          <g fill="none" stroke="#4A4A4A" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+            <!-- 外圈圆弧 (从顶端顺时针绕一圈，但在左上方断开，并在顶端带有一个垂直的小箭头) -->
+            <path d="M 50,14 A 36,36 0 1,1 32,24" />
+            
+            <!-- 顶部的垂直小箭头/突起 -->
+            <path d="M 50,4 L 50,14" />
+            
+            <!-- 中心指向左上方的粗指针 -->
+            <path d="M 50,50 L 32,32" stroke-width="9" />
+          </g>
+        
+          <!-- 表盘上的三个刻度小圆点 -->
+          <g fill="#4A4A4A">
+            <!-- 左侧圆点 (约9点钟位置) -->
+            <circle cx="26" cy="50" r="4.5" />
+            <!-- 下方圆点 (约6点钟位置) -->
+            <circle cx="50" cy="74" r="4.5" />
+            <!-- 右侧圆点 (约3点钟位置) -->
+            <circle cx="74" cy="50" r="4.5" />
+          </g>
+        </svg>
+        EOF
+        cat<<-'EOF' >wlan.svg
+        <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#000000"><path d="M409-149q-29-29-29-71t29-71q29-29 71-29t71 29q29 29 29 71t-29 71q-29 29-71 29t-71-29Zm213.5-387Q690-512 745-470q20 15 20.5 39.5T748-388q-17 17-42 17.5T661-384q-38-26-84-41t-97-15q-51 0-97 15t-84 41q-20 14-45 13t-42-18q-17-18-17-42.5t20-39.5q55-42 122.5-65.5T480-560q75 0 142.5 24Zm93-223Q826-718 914-643q20 17 21 42t-17 43q-17 17-42 17.5T831-556q-72-59-161.5-91.5T480-680q-100 0-189.5 32.5T129-556q-20 16-45 15.5T42-558q-18-18-17-43t21-42q88-75 198.5-116T480-800q125 0 235.5 41Z"/></svg>
+        EOF
+
+        mv wut.svg wlan.svg gui/theme/portrait_hdpi/images/SVG/Icons
+
         fi
 
     - name: Add WLAN support For 14.1 Branch
@@ -166,6 +277,8 @@ jobs:
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
         git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./${{ inputs.DEVICE_PATH }}
         cd ${{ inputs.DEVICE_PATH }}
+        sed -i 's/magisk_prebuilt/ /' device.mk
+        cat device.mk
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
     - name: Update OrangeFox Built-in Magisk
@@ -178,7 +291,77 @@ jobs:
         if [ "${{ inputs.MANIFEST_BRANCH }}" = "14.1" ]; then
           sed -i 's/OrangeFox_A12.sh/OrangeFox_A14.sh/g' Magisk_ver.patch
         fi
-        git am Magisk_ver.patch
+
+        set +e
+        PATCH_FILE=Magisk_ver.patch
+
+        if [ -z "$PATCH_FILE" ]; then
+            echo "❌ 错误: 请提供补丁文件或邮箱归档路径 (例如: ./ci_smart_am.sh my_patches.patch)"
+            exit 1
+        fi
+        
+        echo "🚀 开始在 CI 环境中尝试应用补丁..."
+        # 第一次尝试应用补丁
+        git am "$PATCH_FILE"
+        AM_STATUS=$?
+        
+        # 如果出错，进入智能修复循环
+        while [ $AM_STATUS -ne 0 ]; do
+            # 检查是否是真的在 am 状态中
+            if [ ! -d ".git/rebase-apply" ]; then
+                echo "❌ git am 失败，但未检测到 rebase-apply 目录，可能是其他严重错误。"
+                exit 1
+            fi
+        
+            echo "⚠️ 检测到 git am 报错，正在分析原因..."
+        
+            # 1. 尝试从 git status 或日志中抓取报错的符号链接文件
+            TARGET_FILE=$(git status 2>&1 | grep "wrong type" | awk -F': ' '{print $2}')
+            
+            if [ -z "$TARGET_FILE" ]; then
+                # 备用方案：通过 show-current-patch 分析当前正在处理的补丁目标
+                TARGET_FILE=$(git am --show-current-patch=diff 2>/dev/null | grep -m 1 "^--- a/" | sed 's|^--- a/||')
+            fi
+        
+            # 2. 如果找不到目标文件，或者目标文件不是符号链接，说明是普通代码冲突，CI 无法自动解，直接退出
+            if [ -z "$TARGET_FILE" ] || [ ! -L "$TARGET_FILE" ]; then
+                echo "❌ [CI 终止] 遇到了非符号链接导致的普通代码冲突、或是补丁损坏。内容如下："
+                git am --show-current-patch=diff
+                exit 1
+            fi
+        
+            # 3. 找到真实的底层文件
+            REAL_FILE=$(readlink -f "$TARGET_FILE")
+            echo "🔗 发现符号链接冲突: $TARGET_FILE -> $REAL_FILE"
+        
+            # 4. 提取补丁并使用系统 patch 工具强制写入真实文件
+            echo "🛠️ 正在提取当前补丁并强行应用到真实文件..."
+            git am --show-current-patch=diff > /tmp/ci_patch.diff
+        
+            # 使用原生 patch 绕过 git 的类型检查
+            if patch -p1 -N $REAL_FILE < $PATCH_FILE; then
+                echo "✅ 补丁已强行写入真实文件。"
+                
+                # 5. 将变动加入暂存区，并告诉 git am 冲突已解决
+                git status
+                git add "$TARGET_FILE"
+                git am --continue
+                git status
+                break 
+                
+                # 重新捕获下一步的 git am 状态，继续 while 循环
+                #AM_STATUS=$?
+            else
+                echo "❌ [CI 终止] 原生 patch 应用到真实文件时失败，可能存在不匹配的代码冲突。拒绝文件内容："
+                [ -f /tmp/ci_rejects.rej ] && cat /tmp/ci_rejects.rej
+                exit 1
+            fi
+        
+            # 清理每轮的临时文件
+            #rm -f /tmp/ci_patch.diff /tmp/ci_rejects.rej
+        done
+        
+        echo "🎉 所有补丁已在 CI 中成功自动修复并应用完成！"
 
     - name: Update OrangeFox Built-in magiskboot
       run: |
@@ -197,15 +380,58 @@ jobs:
         export USE_CCACHE=1
         export CCACHE_EXEC=/usr/bin/ccache
         sed -i 's/return sandboxConfig\.working/return false/g' build/soong/ui/build/sandbox_linux.go
+        sed -i 's/\(export OF_SUPPORT_ALL_BLOCK_OTA_UPDATES=\)1/\10/' device/xiaomi/alioth/vendorsetup.sh
+        sed -i 's/OF\(_AB_DEVICE=\)/FOX\1/' device/xiaomi/alioth/vendorsetup.sh
         fi
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
+        export export OF_PATCH_AVB20=1
         set -e
         if [[ ${{ inputs.MANIFEST_BRANCH }} == '14.1' ]]; then
         lunch twrp_${{ inputs.DEVICE_NAME }}-ap2a-eng && make clean && mka adbd ${{ inputs.BUILD_TARGET }}image
         else
+
+        export FOX_AB_DEVICE=1
+        export OF_USE_LZMA_COMPRESSION=1
+        export FOX_DRASTIC_SIZE_REDUCTION=1
+        export FOX_VANILLA_BUILD=1
+        
         lunch twrp_${{ inputs.DEVICE_NAME }}-eng && make clean && mka adbd ${{ inputs.BUILD_TARGET }}image
         fi
+
+    - name: Check if Recovery Exist
+      run: |
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
+        devicePath=${{ github.event.inputs.DEVICE_NAME }}
+        outputPath=${{ inputs.DEVICE_PATH }}
+        comParePath="${outputPath##*/}"
+        [[ $comParePath != ${{ github.event.inputs.DEVICE_NAME }} ]] && devicePath="${comParePath}"
+        echo "devicePath=$devicePath" >> $GITHUB_ENV
+
+        if [ -f out/target/product/${devicePath}/recovery.img ]; then
+            echo "RECOVERY_TYPE=recovery" >> $GITHUB_ENV
+            echo "recovery.img file found!"
+            echo "MD5_IMG=$(md5sum out/target/product/${devicePath}/${{ github.event.inputs.BUILD_TARGET }}.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
+        elif [ -f out/target/product/${devicePath}/boot.img ]; then
+            echo "RECOVERY_TYPE=boot" >> $GITHUB_ENV
+            echo "boot.img file found!"
+            echo "MD5_IMG=$(md5sum out/target/product/${devicePath}/${{ github.event.inputs.BUILD_TARGET }}.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
+        elif [ -f out/target/product/${devicePath}/vendor_boot.img ]; then
+            echo "RECOVERY_TYPE=vendor_boot" >> $GITHUB_ENV
+            echo "vendor_boot.img file found!"
+            echo "MD5_IMG=$(md5sum out/target/product/${devicePath}/vendor_boot.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
+        else
+            echo "No Recovery file found!"
+            exit 1
+        fi
+
+    - name: Setup upterm session
+      with:
+        wait-timeout-minutes: 20
+        # detached: true
+      # if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_enabled }}
+      if: ${{ failure() || inputs.debug_enabled }}
+      uses: owenthereal/action-upterm@v2
 
     - name: Set Release Properties
       run: |
@@ -218,17 +444,19 @@ jobs:
         fi
         echo "DEVICE_TREE_URL=${DEVICE_TREE_URL}" >> $GITHUB_ENV
 
+
     - name: Upload to Release
       uses: softprops/action-gh-release@master
       with:
         files: |
-          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ inputs.DEVICE_NAME }}/OrangeFox*.img
-          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ inputs.DEVICE_NAME }}/OrangeFox*.zip
+          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.devicePath }}/OrangeFox*.img
+          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.devicePath }}/OrangeFox*.zip
         name: OrangeFox Recovery for ${{ inputs.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
-        tag_name: ${{ github.run_id }}
+        tag_name: ofrp-${{ inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}
         body: |
           ## OrangeFox Recovery Build - Unofficial
           Build: fox_${{ inputs.MANIFEST_BRANCH }}
           Device: [Device Tree/Branch](${{ env.DEVICE_TREE_URL }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
           Commit: Most recent [commit](${{ env.DEVICE_TREE_URL }}/commit/${{ env.COMMIT_ID }}) during building.
+          MD5 (img): ${{ env.MD5_IMG }}
           
